@@ -1,0 +1,314 @@
+---
+title: "Analysis on BGL"
+author: "Nyein Min Zaw"
+date: "2025-02-13"
+output: 
+  pdf_document:
+    highlight: tango
+bibliography: citation.bib
+csl: european-journal-of-soil-biology.csl
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, comment = NA,
+                      tidy = FALSE)
+knitr::opts_chunk$set(fig.width=6, fig.height=4, dpi=300,
+                      fig.align='center')
+#tango (colorful)
+#pygments (dark)
+# kate (soft contrast)
+# monochrome (grayscale)
+```
+## Data Loading
+
+The data are stored in Book1.xlsx file in both wide format and long format. @syeed2023surface The R program will load the long format in Sheet 2. The structure of the data is with 3 columns: Treatments, Duration and Blood Glucose Level (BGL) @dash2021science
+
+```{r load data}
+library(readxl)
+library(tidyverse)
+Book1 <- read_excel("Book1.xlsx", 
+                    sheet = "Sheet2")
+```
+
+## Data Preparation
+using @tidyverse.
+First of all, (@dash2021science) the treatments names along with the control are extracted and stored in variable "trts". Then the BGL values at 45 minutes are taken as the initial reference points for comparison with other BGL of later times. BGL at 0 minutes are not included in the analysis cause this is the assessment data before the administration of both treatments and BGL induction. (@syeed2023surface)
+
+```{r}
+trts <- Book1 %>% distinct(Treatments) %>% pull(Treatments)
+trts
+initial <- Book1 %>% filter(time==45) %>% pull(BGL)
+names(initial)<-rep(trts, each = 5)
+
+fasting<-Book1 %>% filter (time == 0)
+# print(fasting, n = Inf)
+df<-Book1 %>% filter(time!=0) %>% mutate(Percent_reduction=case_when(
+  Treatments==trts[1] ~ (BGL-initial[1:5])/initial[1:5]*100,
+  Treatments==trts[2] ~ (BGL-initial[6:10])/initial[6:10]*100,
+  Treatments==trts[3] ~ (BGL-initial[11:15])/initial[11:15]*100,
+  Treatments==trts[4] ~ (BGL-initial[16:20])/initial[16:20]*100,
+  Treatments==trts[5] ~ (BGL-initial[21:25])/initial[21:25]*100,
+  Treatments==trts[6] ~ (BGL-initial[26:30])/initial[26:30]*100
+)) 
+
+```
+`r knitr::kable(df, row.names = TRUE)`
+
+## Visualization
+
+Use package developed by @wickham2016.
+The **percent change** will be plotted against "time" and the data for each treatment will be presented as separate colored smooth lines
+
+```{r}
+df%>%
+  ggplot(aes(time, Percent_reduction, color = Treatments))+
+  geom_smooth(se=F, span =1)+
+  #geom_point()+
+  scale_color_manual(#breaks = trts,
+                     values = c("red","black","blue",
+                                "springgreen",
+                                "springgreen3","springgreen4"))+
+  scale_x_continuous(limits = c(45,225),
+                     breaks = seq(45,225, 45))+
+  scale_y_continuous(labels = scales::percent_format(scale = 1))+
+  labs(x="Time (Minutes)",
+       y="BGL Reduction (%)") +
+  theme_classic()+
+  theme(
+    panel.grid.major.y = element_line(color = "grey", size = 0.5)
+  )
+
+# or without "normal", which is data from no administration of both treatmens and BGL induction
+
+df%>%filter(Treatments!="Normal") %>% 
+  ggplot(aes(time, Percent_reduction, color = Treatments))+
+  geom_smooth(se=F, span =1)+
+  scale_color_manual(#breaks = Treatments,
+                     values = c("red","black",
+                                "springgreen",
+                                "springgreen3","springgreen4"))+
+    scale_x_continuous(limits = c(45,225),
+                     breaks = seq(45,225, 45))+
+  scale_y_continuous(labels = scales::percent_format(scale=1))+
+  labs(x="Time (Minutes)",
+       y="BGL Reduction (%)") +
+  theme_classic()+
+  theme(
+    panel.grid.major.y = element_line(color = "grey", size = 0.5)
+  )
+```
+
+## Analysis of Variance (F-test)
+
+In ANOVA, the comparison would be made on ***original BGL data*** (not on calculated reduction percent data) between the two controls and the treatments, excluding the "Normal", which is just a type of assessment of measurement system. The data at 0 min would be excluded from the analysis because they are measured before the administration and invalid for treatment comparisons.
+
+```{r}
+df2<-Book1 %>% filter(Treatments !="Normal" & time !=0)
+```
+
+The following data frame, will be used for the further analysis
+`r knitr::kable(df2, row.names = TRUE)`
+
+```{r}
+anova1<-aov(BGL~time+Treatments, data = df2)
+summary(anova1)
+anova2<-aov(BGL~time*Treatments, data = df2)
+summary(anova2)
+anova3<-aov(BGL~time+I(time^2)+Treatments, data = df2)
+summary(anova3)
+
+AIC(anova1, anova2, anova3)
+BIC(anova1, anova2, anova3)
+```
+AIC (Akaike Information Criterion): Penalizes model complexity. Lower is better.
+BIC (Bayesian Information Criterion): More stringent than AIC. Lower is better.
+AIC, BIC values showed that **anova3** is the best of the three.
+
+```{r}
+library(car)
+anova(anova1, anova3)
+```
+
+In this analysis, it is obvious that the function of time showed quadratic effect I(time^2) on BGL reduction. The effect of Treatments showed significance at the p value of less than 0.000. The last model "anova3" seem reasonable choice as proved by the model comparison of anova1 and anova3. Since there is no interaction effect between treatments and time as seen in model 'anova2', post hoc analysis will be focused on only differences among treatments.
+
+## Post hoc Analysis
+
+Because the p-value for Treatmens showed the significant difference among the factor levels, the post hoc analyis using Tukey method will be conducted for pari-wise comparision. This will output the grouping of treatments of similiar effect, with different alphabets showing different effects. The grouping is performed at alpha = 0.05 significant level.
+
+```{r}
+library(agricolae)
+
+Tuk<-HSD.test(anova3, trt = c("Treatments"), alpha = 0.05, group = TRUE)
+print(Tuk)
+
+```
+
+## for more exploration
+
+```{r}
+normal <- Book1 %>% filter(Treatments == "Normal" ) %>% 
+  summarise(meanbgl=mean(BGL)) %>% pull(meanbgl)
+Book1 %>% filter(Treatments != "Normal" & time != 0) %>% 
+  ggplot(aes(Treatments, BGL))+
+  geom_bar(stat='summary', fun = mean)+
+  geom_errorbar(stat = "summary",fun.data = mean_se, width = 0.2)+
+    geom_hline(yintercept = normal, color = "red", linewidth = 0.2,
+               linetype = 'dashed')+
+  facet_wrap(time~., labeller = "label_both")+
+  labs(x=NULL,
+       caption = paste0("Dashed red line indicate average of normal data (",round(normal,2),"), i.e., no treatment and no BGL induction"))+
+  theme_classic()+theme(axis.text.x = element_text(angle = 90, hjust=1))
+
+fastin <- fasting %>% summarise(mean=mean(BGL)) %>% pull(mean)
+Book1 %>% filter(Treatments != "Normal" & time!=0) %>% 
+  ggplot(aes(time, BGL))+
+  geom_bar(stat='summary', fun = mean)+
+  geom_errorbar(stat = "summary",fun.data = mean_se, width = 0.1)+
+  geom_hline(yintercept = fastin, color = "red", linewidth = 0.2,
+               linetype = 'dashed')+
+  labs(x="Time (minutes)",
+       caption = paste0("Dashed red line indicate average of BGL (",round(fastin, 2),") before  treatment and BGL induction"))+
+  scale_x_continuous(limits = c(15,250),
+                     breaks = seq(45,250, 45))+
+  facet_wrap(Treatments~.)+theme_classic()
+
+```
+
+## Further analysis on Quadratic term of factor "time"
+
+Since the model include the qudratic term, it is easier to interpret using the linear regression model. The estimate were in comparison with the default reference point represented as the intercept coefficient, which is the BGL value at the negative control and zero minute. The t-test of an estimate of interested treatments were performed to assess the significance of the difference from that reference value, adjusting for the effect of other factors, in this case, "time".
+
+```{r}
+lm_mod <- lm(BGL~time+I(time^2)+Treatments, data = df2)
+summary.lm(lm_mod)
+```
+
+Or, we can separately test the significance of the polynomial terms .
+
+```{r}
+df2$time <- factor(df2$time)
+contrasts(df2$time) <- contr.poly(5)
+polymod <- aov(BGL~time+Treatments, data = df2)
+summary(polymod)
+summary.aov(polymod, split =list(
+  time = list("linear" = 1, 
+              "Quadratic" = 2)))
+```
+
+Here, we can clearly see the fit of quadratic term of time is significant, shown in both linear regression model and anova model with polynomial contrasts on factor "time".
+
+## Model Assumption Checking
+
+```{r}
+plot(anova3, which = c(1,2))
+```
+
+
+# Remodelling without potential outliers/influencers
+
+Here we can see that three data points were very alarmingly not normal. may be outliers and influencers. these data points were:
+
+```{r}
+df2[c(124, 79, 64),]
+```
+
+And next, conduct the analysis, again, with new data frame (without those 3 points.). Well, let's try removing the most prominent one first. i.e., `r knitr::kable(df2 %>% rownames_to_column(.) %>% filter(rowname==124))`, the 124th observation of the working data frame.
+```{r}
+df3 <- df2[-c(124),]
+polymod1 <- aov(BGL~time+Treatments, data = df3)
+summary(polymod1)
+summary.aov(polymod1, split =list(
+  time = list("linear" = 1, 
+              "Quadratic" = 2)))
+TukeyHSD(polymod1)
+plot(polymod1, which = 1:2)
+```
+
+For another analysis, we'll exclude all three potential outliers, which are `r knitr::kable(df2 %>% rownames_to_column(.) %>% filter(rowname==64 | rowname==79| rowname==124))`.
+
+
+```{r}
+df4 <- df2[-c(124, 79, 64),]
+polymod2 <- aov(BGL~time+Treatments, data = df4)
+summary(polymod2)
+summary.aov(polymod2, split =list(
+  time = list("linear" = 1, 
+              "Quadratic" = 2)))
+```
+
+produce stronger statistical prove that there are differences among means of factor levels and p value for quadratic term also provide stronger prove.
+
+```{r}
+plot(polymod2, which = 1:2)
+```
+
+residual vs fitted plot showed no violation of Homoscedasticity, which is more important for ANOVA than normality, which is seen in normal q-q plot and seemed violated.
+
+```{r}
+Tuk<-HSD.test(polymod2, trt = c("Treatments"), alpha = 0.05, group = TRUE)
+print(Tuk)
+Tuk<-HSD.test(polymod2, trt = c("Treatments"), alpha = 0.05, group = F)
+print(Tuk$comparison[,1:3])
+#TukeyHSD(polymod)
+```
+
+The results showed that positive control and sakarphyu (1.5 g) seem to have similar effect while negative control and sakarphyu (0.5 g) does the same. Sakarphyu (1 g) showed similiarity with positive control and sakarphyu (0.5 g)
+```{r}
+par(mar = c(3,15,3,3))
+plot(TukeyHSD(polymod2), las = 1)
+```
+
+If the horizontal lines representing the mean difference and confident level of the two comparing factor levels did not cross the dashed zero vertical line, the difference between the two means is significant at alpha = 0.05. If the line cross it, the difference is not significant.
+
+# which model to use?
+```{r}
+Tuk <- HSD.test(polymod1, "Treatments", group = F)
+p1 <- Tuk$comparison[,2:3]
+Tuk <- HSD.test(polymod2, "Treatments", group = F)
+p2 <- Tuk$comparison[,2:3]
+Tuk <- HSD.test(anova3, "Treatments", group = F)
+p3 <- Tuk$comparison[,2:3]
+
+P123 <- cbind(p1,p2,p3)
+names(P123) <- c("polymod1","sig1","polymod2","sig2","anova3","sig3")
+#p1 <- TukeyHSD(polymod1)$Treatments[, 4]
+#p2 <- TukeyHSD(polymod2)$Treatments[, 4]
+#p3 <- TukeyHSD(anova3)$Treatments[, 4]
+
+# comparisondf <- data.frame(polymod_1=p1,polymod_2=p2, anova_3=p3)
+# # p values calculated by Tukey test for selected 3 models
+# round(comparisondf,4)
+# 
+# comparisondf %>% mutate("Pair-wise Comparison"=rownames(.)) %>% 
+# pivot_longer(cols = 1:3, names_to = "mods", values_to = "p")%>%
+#   mutate(s=ifelse(p<0.001, "***", ifelse(p<0.01, "**",ifelse(p<0.05, "*", "NS")))) %>% 
+#   select(!"p") %>% 
+#   pivot_wider(names_from = mods, values_from = s) %>% print(n=Inf)
+
+AIC(polymod1,polymod2,anova3)
+BIC(polymod1,polymod2,anova3)
+```
+`r knitr::kable(P123)`
+
+According to these analysis, model "polymod2" is the best of the three based on having lowest values in both AIC and BIC.
+Revisiting what the polymod2 is, it is build without 3 potential ourliers. in post hoc analysis with Tukey test, it showed the best resolution on comparing the Treatments effect.
+
+## time as random factor and treatment as fixed factor
+```{r}
+library(lme4)
+library(lmerTest)
+lmmod<-lmer(BGL~Treatments+(1|time), data = df2)
+summary(lmmod)
+
+library(emmeans)
+posthoc_results <- emmeans(lmmod, pairwise ~ Treatments, adjust = "tukey")
+print(posthoc_results)
+
+```
+
+
+## Lastly Session Info
+```{r}
+sessionInfo()
+```
+
+# References
